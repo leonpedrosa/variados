@@ -1,0 +1,227 @@
+import requests
+import urllib.parse
+import json
+
+BASE_URL = "https://desktop-dev-restapi.onbmc.com"
+
+
+def get_token(usernamehellix, passwordhellix):
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded"
+    }
+
+    params = {
+        "username": usernamehellix,
+        "password": passwordhellix
+    }
+
+    query_string = urllib.parse.urlencode(params)
+    url = f"{BASE_URL}/api/jwt/login?{query_string}"
+
+    response = requests.post(url, headers=headers)
+
+    if response.status_code != 200:
+        raise Exception(">>>> Erro ao obter token do Helix")
+    else:
+        print(">>>> Token Hellix obtido com sucesso")
+        print(response.text)
+        return response
+
+
+def create_inc_hellix(token, tipo_evento):
+    headers = {
+        "Authorization": f"AR-JWT {token}",
+        "Content-Type": "application/json",
+        "X-Requested-By": "XMLHttpRequest",
+        "Host": "desktop-dev-restapi.onbmc.com"
+    }
+
+    # Valores fixos para teste
+
+    if tipo_evento == "Massivo":
+        EntityPort = 0
+        PhysicalPort = 0
+        PhysicalSlot = 0
+    elif tipo_evento == "Individual":
+        EntityPort = 123  # Simulado
+        PhysicalPort = 5
+        PhysicalSlot = 2
+
+    payload = {
+        "values": {
+            "Node": "SR-A02-ITV001-SP",
+            "Node Alias": "10.17.231.3",
+            "Agent": "PHB",
+            "Manager": "ITNM",
+            "Class": 8000,
+            "Alert Group": "PowerFailure",
+            "Acknowledged": "0",
+            "Status": "4",
+            "Tally": 0,
+            "Serial": "383493",
+            "ServerName": "COL_P_1",
+            "ServerSerial": "18673370",
+            "Summary": "Host is Unavailable",
+            "Alert Key": "almMainsFailAlert",
+            "Assigned-to": "william.candido",
+            "DSK_GST_AffectedClients": "10",
+            "Type": 1,
+            "Poll": 60,
+            "Identifier": "SR-A01-ITV001-SP PowerFailure DESK_P_2 PHB ITNM almMainsFailAlert 1",
+            "Grade": 0,
+            "Location": "Avenida_Brasil_295",
+            "DSK_GST_Impact": 2000,
+            "DSK_GST_Urgency": 2000,
+            "DSK_GST_EntityPort": EntityPort,
+            "DSK_GST_ictEntityNetwork": "3",
+            "DSK_GST_ictEntityType": "12",
+            "DSK_GST_ictEventClassTier1": "4",
+            "DSK_GST_ictEventClassTier2": "4",
+            "DSK_GST_PhysicalSlot": PhysicalSlot,
+            "DSK_GST_PhysicalPort": PhysicalPort,
+            "FirstOccurance": "2025-05-20T00:00:00",
+            "LastOccurance": "2025-05-21T00:00:00",
+            "InternalLast": "2025-05-20T00:00:00",
+            "State Change": "2025-05-20T00:00:00"
+        }
+    }
+
+    print(">>>> Payload enviado para abrir requisição no Hellix")
+    print(json.dumps(payload, indent=2))
+
+    try:
+        response = requests.post(
+            "https://desktop-dev-restapi.onbmc.com/api/arsys/v1/entry/Alerts%20Omnibus?fields=values(DSK_GST_IncidentNumber)",
+            headers=headers, json=payload
+        )
+        response.raise_for_status()
+    except Exception as e:
+        print(f">>>> Erro ao realizar requisição ao Hellix: {e}")
+        return {"incNumber": "Erro ao consultar Hellix", "href": "ERRO", "msg": response.text,
+                "status": response.status_code}
+
+    try:
+        parsed = response.json()
+        print(">>>> Retorno INC:", parsed)
+    except Exception as e:
+        return Exception(f">>>> Erro ao interpretar a resposta JSON da API Helix: {e}")
+
+    incidentNumber = parsed["values"]["DSK_GST_IncidentNumber"]
+    href = parsed["_links"]["self"][0]["href"]
+
+    return {
+        "incNumber": incidentNumber,
+        "href": href
+    }
+
+
+def get_inc_dates(inc, token):
+    headers = {
+        "Authorization": f"AR-JWT {token}",
+        "Content-Type": "application/json",
+        "X-Requested-By": "XMLHttpRequest",
+        "Host": "desktop-dev-restapi.onbmc.com"
+    }
+
+    query = urllib.parse.quote(f"'DSK_GST_IncidentNumber'=\"{inc}\"")
+    url = f"https://desktop-dev-restapi.onbmc.com/api/arsys/v1/entry/Alerts%20Omnibus?q={query}"
+
+    try:
+        response = requests.get(url, headers=headers)
+        if response.status_code != 200:
+            print(f">>>> Erro ao obter entrada do Helix: {response.status_code} - {response.text}")
+            return False
+    except Exception as e:
+        print(f">>>> Erro na requisição GET: {e}")
+        return False
+
+    try:
+        parsed = response.json()
+    except Exception as e:
+        print(f">>>> Erro ao interpretar a resposta JSON da API Helix: {e}")
+        return False
+
+    # Verifica se há entradas
+    if not parsed.get("entries") or len(parsed["entries"]) == 0:
+        print(f">>>> Nenhuma entrada encontrada para o incidente: {inc}")
+        return False
+
+    print(">>>> Entrada obtida com sucesso:")
+    print(parsed["entries"][0])
+    return parsed["entries"][0]
+
+
+def update_hellix(entry, token, payload):
+    headers = {
+        "Authorization": f"AR-JWT {token}",
+        "Content-Type": "application/json",
+        "X-Requested-By": "XMLHttpRequest",
+        "Host": "desktop-dev-restapi.onbmc.com"
+    }
+
+    url = f"{BASE_URL}/api/arsys/v1/entry/Alerts%20Omnibus/{entry}"
+
+    response = requests.put(url, headers=headers, json=payload)
+
+    print(f">>>> Atualização Hellix - EntryID {entry}")
+
+    if response.status_code != 204:
+        print(f">>>> Falha na correlação. Status HTTP: {response.status_code} - Response: {response.text}")
+        return False
+
+    print(f">>>> updateHellix status: {response.status_code} response: {response.text}")
+    return response.text
+
+
+def main():
+    total_chamados = int(input("Quantos chamados deseja criar? "))
+    username = "helix.user"
+    password = "QMg7v<(gY5"
+
+    token = get_token(username, password).text
+
+    todos_inc = {}
+    for i in range(0, total_chamados):
+        print(">>>> Criando chamado", i)
+
+        inc_data = create_inc_hellix(token, "Individual")
+
+        print(f">>>> INC individual criado: {inc_data}")
+
+        inc = inc_data["incNumber"]
+        data = get_inc_dates(inc, token)
+
+        entry = data["values"]["Entry-Id"]
+
+        todos_inc[entry] = inc
+
+    inc_data_massivo = create_inc_hellix(token, "Massivo")
+
+    print(">>>> INC Massivo criado:", inc_data_massivo)
+
+    inc_Massive = inc_data_massivo["incNumber"]
+    retorno_Massive = get_inc_dates(inc_Massive, token)
+
+    entry_Massive = retorno_Massive["values"]["Entry-Id"]
+
+    dataMassive = {}
+    dataMassive[entry_Massive] = inc_Massive
+
+    print(">>>> Todos os INC criados:", todos_inc)
+    print(">>>> INC Massivo:", dataMassive)
+
+    entrys = list(todos_inc.keys())
+
+    for entry in entrys:
+        # Atualização simulada
+        payload_update = {
+            "values": {
+                "DSK_GST_MassiveIncidentNumber": inc_Massive
+            }
+        }
+        update_response = update_hellix(entry, token, payload_update)
+        print(">>>> Resposta da atualização:", update_response)
+
+
+if __name__ == "__main__":
+    main()  
